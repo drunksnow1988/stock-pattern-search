@@ -69,51 +69,39 @@ def fetch_history_yf(code):
         return None, None
 
 
+CACHE_URL = ("https://github.com/drunksnow1988/stock-pattern-search"
+             "/releases/download/v1.0/stock_cache.pkl.gz")
+
 def build_cache():
+    """从 GitHub Release 下载预构建缓存（3MB），无需调用任何股票 API。"""
     global stock_list, stock_matrix
-    set_state(status="loading", progress=0, message="读取股票列表…")
+    set_state(status="loading", progress=0, total=100,
+              message="正在下载股票数据缓存（约 3MB）…")
     try:
-        with open(LIST_FILE, encoding="utf-8") as f:
-            all_stocks = json.load(f)
+        import urllib.request, gzip, io
+        set_state(message="连接 GitHub…")
+        with urllib.request.urlopen(CACHE_URL, timeout=60) as resp:
+            gz_data = resp.read()
 
-        set_state(total=len(all_stocks),
-                  message=f"开始下载 {len(all_stocks)} 只股票历史数据…")
+        set_state(progress=50, message="解压缓存文件…")
+        raw = gzip.decompress(gz_data)
+        data = pickle.loads(raw)
 
-        done = [0]
-        lock = threading.Lock()
-        raw  = []
+        stock_list   = data["stock_list"]
+        stock_matrix = data["stock_matrix"]
 
-        def worker(info):
-            prices, dates = fetch_history_yf(info["code"])
-            with lock:
-                done[0] += 1
-                if done[0] % 300 == 0:
-                    set_state(progress=done[0],
-                              message=f"已下载 {done[0]}/{len(all_stocks)} 只")
-            if prices:
-                return {"code": info["code"], "name": info["name"],
-                        "prices": prices, "dates": dates}
-            return None
-
-        # Yahoo Finance 限速较严，并发不宜过高
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            for res in ex.map(worker, all_stocks):
-                if res:
-                    raw.append(res)
-
-        stock_list   = raw
-        mat = [z_norm(resample(s["prices"], N_DAYS)) for s in stock_list]
-        stock_matrix = np.array(mat, dtype=float)
-
+        # 顺手存到本地，下次直接读
         with open(CACHE_FILE, "wb") as f:
-            pickle.dump({"stock_list": stock_list, "stock_matrix": stock_matrix}, f)
+            f.write(raw)
 
-        set_state(status="ready", progress=len(stock_list), total=len(stock_list),
-                  message=f"就绪，共 {len(stock_list)} 只股票",
+        n = len(stock_list)
+        set_state(status="ready", progress=100, total=100,
+                  message=f"就绪，共 {n} 只股票",
                   last_updated=datetime.now().strftime("%Y-%m-%d %H:%M"))
+        print(f"✅ 缓存下载完成，共 {n} 只股票")
     except Exception as e:
         import traceback; traceback.print_exc()
-        set_state(status="error", message=str(e))
+        set_state(status="error", message=f"缓存下载失败：{e}")
 
 
 def load_cache():
