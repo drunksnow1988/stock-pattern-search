@@ -260,14 +260,18 @@ def api_search():
     results.sort(key=lambda x: -x["score"])
     return jsonify({"results": results[:top_k], "total": len(stock_list)})
 
-# ──────────────────── 启动 ────────────────────
+# ──────────────────── 启动（gunicorn 和直接运行都会执行） ────────────────────
 
-if __name__ == "__main__":
+def _init():
     if load_cache():
         print(f"✅ 已从缓存加载 {len(stock_list)} 只股票")
     else:
         print("⚠️  未找到缓存，开始后台下载（约 5-10 分钟）…")
         threading.Thread(target=build_cache, daemon=True).start()
+
+_init()
+
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5001))
     print(f"🚀  http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
