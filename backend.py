@@ -268,5 +268,6 @@ if __name__ == "__main__":
     else:
         print("⚠️  未找到缓存，开始后台下载（约 5-10 分钟）…")
         threading.Thread(target=build_cache, daemon=True).start()
-    print("🚀  http://localhost:5001")
-    app.run(host="0.0.0.0", port=5001, debug=False, use_reloader=False)
+    port = int(os.environ.get("PORT", 5001))
+    print(f"🚀  http://localhost:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
