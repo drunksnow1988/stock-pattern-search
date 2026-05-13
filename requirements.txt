@@ -1,5 +1,5 @@
 flask>=3.0.0
 flask-cors>=4.0.0
-akshare>=1.14.0
 numpy>=1.26.0
+yfinance>=0.2.40
 gunicorn>=21.2.0

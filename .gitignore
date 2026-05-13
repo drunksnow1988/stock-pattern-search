@@ -4,3 +4,4 @@ server.log
 __pycache__/
 *.pyc
 .DS_Store
+# stocks_list.json 需要提交到仓库

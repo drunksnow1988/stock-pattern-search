@@ -1,51 +1,32 @@
 #!/usr/bin/env python3
-"""A股形态搜索后端 —— 完全基于新浪财经直接 HTTP 请求，不依赖 mini-racer"""
+"""
+A股形态搜索后端
+- 股票列表：内置 stocks_list.json（无需外部接口）
+- 历史数据：Yahoo Finance（全球可访问）
+"""
 
-import os
-# 清除系统代理环境变量（代理断开时会导致所有请求失败）
-os.environ.pop("HTTP_PROXY",  None)
-os.environ.pop("HTTPS_PROXY", None)
-os.environ.pop("http_proxy",  None)
-os.environ.pop("https_proxy", None)
-os.environ["NO_PROXY"] = "*"
-
-import pickle, threading, json
+import os, pickle, threading, json
 import numpy as np
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-
-# patch requests：强制忽略代理（必须在任何 requests 使用前执行）
-import requests as _rq
-_orig_send = _rq.adapters.HTTPAdapter.send
-def _no_proxy_send(self, req, **kw):
-    kw["proxies"] = {}
-    return _orig_send(self, req, **kw)
-_rq.adapters.HTTPAdapter.send = _no_proxy_send
 
 app = Flask(__name__)
 CORS(app)
 
-CACHE_FILE = os.path.join(os.path.dirname(__file__), "stock_cache.pkl")
-N_DAYS = 60
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(BASE_DIR, "stock_cache.pkl")
+LIST_FILE  = os.path.join(BASE_DIR, "stocks_list.json")
+N_DAYS     = 60
 
 state = {"status": "idle", "progress": 0, "total": 0,
          "message": "等待启动", "last_updated": None}
-state_lock = threading.Lock()
-
+state_lock   = threading.Lock()
 stock_list   = []
 stock_matrix = None
 
-SESSION = _rq.Session()
-SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/120.0.0.0 Safari/537.36",
-    "Referer": "https://finance.sina.com.cn",
-})
-
-# ──────────────────── 数值工具 ────────────────────
+# ──────────────── 数值工具 ────────────────
 
 def z_norm(arr):
     a = np.asarray(arr, dtype=float)
@@ -57,10 +38,8 @@ def resample(arr, n):
     return np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(a)), a)
 
 def dtw_distance(s1, s2):
-    n = len(s1)
-    band = max(3, n // 10)
-    INF = float("inf")
-    dp = [[INF] * (n + 1) for _ in range(n + 1)]
+    n, band = len(s1), max(3, len(s1) // 10)
+    dp = [[float("inf")] * (n + 1) for _ in range(n + 1)]
     dp[0][0] = 0.0
     for i in range(1, n + 1):
         for j in range(max(1, i - band), min(n + 1, i + band + 1)):
@@ -72,102 +51,53 @@ def set_state(**kw):
     with state_lock:
         state.update(kw)
 
-# ──────────────────── 新浪财经直接接口 ────────────────────
+# ──────────────── 数据加载（Yahoo Finance） ────────────────
 
-def fetch_stock_list_sina():
-    """从新浪获取全量 A 股代码列表（不使用 akshare，避免 mini-racer 子线程崩溃）。"""
-    stocks, seen = [], set()
-    for node in ("hs_a", "sh_a", "sz_a"):
-        page = 1
-        while True:
-            try:
-                r = SESSION.get(
-                    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php"
-                    "/Market_Center.getHQNodeDataSimple",
-                    params={"num": 100, "page": page, "sort": "symbol",
-                            "asc": 1, "node": node},
-                    timeout=15, proxies={}
-                )
-                data = r.json()
-                if not data:
-                    break
-                for s in data:
-                    sym = s.get("symbol", "")
-                    if sym not in seen:
-                        seen.add(sym)
-                        # symbol = sh600519 / sz000001，提取纯数字 code
-                        code = s.get("code", sym[2:])
-                        stocks.append({"code": str(code).zfill(6),
-                                       "name": s.get("name", code)})
-                if len(data) < 100:
-                    break
-                page += 1
-            except Exception:
-                break
-    return stocks
-
-
-def fetch_history_tencent(code):
-    """
-    腾讯财经前复权日线接口，格式：[date, open, close, high, low, volume]
-    返回 (prices, dates) 或 (None, None)。
-    """
-    prefix = "sh" if code.startswith("6") else "sz"
-    symbol = prefix + code
+def fetch_history_yf(code):
+    """用 Yahoo Finance 获取前复权日线收盘价，全球均可访问。"""
     try:
-        r = SESSION.get(
-            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
-            params={"_var": "kline_dayfq",
-                    "param": f"{symbol},day,,,{N_DAYS + 10},qfq"},
-            timeout=15, proxies={}
-        )
-        import json as _json
-        text = r.text
-        # 响应格式: kline_dayfq={...}
-        raw = _json.loads(text[text.index("=") + 1:])
-        klines = (raw.get("data", {}).get(symbol, {}).get("qfqday")
-                  or raw.get("data", {}).get(symbol, {}).get("day"))
-        if not klines or len(klines) < 10:
+        import yfinance as yf
+        suffix = ".SS" if code.startswith("6") else ".SZ"
+        ticker = yf.Ticker(code + suffix)
+        df = ticker.history(period="4mo", interval="1d", auto_adjust=True)
+        if df is None or len(df) < N_DAYS:
             return None, None
-        prices = [float(k[2]) for k in klines]   # index 2 = close
-        dates  = [k[0][:10] for k in klines]
-        return prices[-N_DAYS:], dates[-N_DAYS:]
+        prices = df["Close"].tolist()[-N_DAYS:]
+        dates  = [str(d)[:10] for d in df.index.tolist()[-N_DAYS:]]
+        return prices, dates
     except Exception:
         return None, None
 
-# ──────────────────── 缓存构建 ────────────────────
 
 def build_cache():
     global stock_list, stock_matrix
-    set_state(status="loading", progress=0, total=0, message="获取股票列表…")
+    set_state(status="loading", progress=0, message="读取股票列表…")
     try:
-        codes_info = fetch_stock_list_sina()
-        if not codes_info:
-            set_state(status="error", message="无法获取股票列表")
-            return
+        with open(LIST_FILE, encoding="utf-8") as f:
+            all_stocks = json.load(f)
 
-        set_state(total=len(codes_info),
-                  message=f"开始下载 {len(codes_info)} 只股票历史数据…")
+        set_state(total=len(all_stocks),
+                  message=f"开始下载 {len(all_stocks)} 只股票历史数据…")
 
-        done  = [0]
-        lock  = threading.Lock()
-        raw   = []
+        done = [0]
+        lock = threading.Lock()
+        raw  = []
 
         def worker(info):
-            code = info["code"]
-            prices, dates = fetch_history_tencent(code)
+            prices, dates = fetch_history_yf(info["code"])
             with lock:
                 done[0] += 1
                 if done[0] % 300 == 0:
                     set_state(progress=done[0],
-                              message=f"已下载 {done[0]}/{len(codes_info)} 只")
+                              message=f"已下载 {done[0]}/{len(all_stocks)} 只")
             if prices:
-                return {"code": code, "name": info["name"],
+                return {"code": info["code"], "name": info["name"],
                         "prices": prices, "dates": dates}
             return None
 
-        with ThreadPoolExecutor(max_workers=30) as ex:
-            for res in ex.map(worker, codes_info):
+        # Yahoo Finance 限速较严，并发不宜过高
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for res in ex.map(worker, all_stocks):
                 if res:
                     raw.append(res)
 
@@ -178,11 +108,9 @@ def build_cache():
         with open(CACHE_FILE, "wb") as f:
             pickle.dump({"stock_list": stock_list, "stock_matrix": stock_matrix}, f)
 
-        set_state(
-            status="ready", progress=len(stock_list), total=len(stock_list),
-            message=f"就绪，共 {len(stock_list)} 只股票",
-            last_updated=datetime.now().strftime("%Y-%m-%d %H:%M"),
-        )
+        set_state(status="ready", progress=len(stock_list), total=len(stock_list),
+                  message=f"就绪，共 {len(stock_list)} 只股票",
+                  last_updated=datetime.now().strftime("%Y-%m-%d %H:%M"))
     except Exception as e:
         import traceback; traceback.print_exc()
         set_state(status="error", message=str(e))
@@ -202,12 +130,12 @@ def load_cache():
     except Exception:
         return False
 
-# ──────────────────── 路由 ────────────────────
+# ──────────────── 路由 ────────────────
 
 @app.route("/")
 def index():
-    path = os.path.join(os.path.dirname(__file__), "index.html")
-    return Response(open(path, encoding="utf-8").read(), mimetype="text/html")
+    return Response(open(os.path.join(BASE_DIR, "index.html"), encoding="utf-8").read(),
+                    mimetype="text/html")
 
 @app.route("/api/status")
 def api_status():
@@ -233,23 +161,19 @@ def api_search():
     if len(points) < 6:
         return jsonify({"error": "曲线太短，请多画一些"}), 400
 
-    y_raw = np.array([1.0 - p["y"] for p in points], dtype=float)
-    query = z_norm(resample(y_raw, N_DAYS))
-
+    y_raw       = np.array([1.0 - p["y"] for p in points], dtype=float)
+    query       = z_norm(resample(y_raw, N_DAYS))
     mat         = stock_matrix
     pearson     = (mat @ query) / N_DAYS
     euclid      = np.sqrt(((mat - query) ** 2).mean(axis=1))
-    euclid_norm = euclid / (euclid.max() + 1e-8)
-    pre_score   = 0.6 * pearson - 0.4 * euclid_norm
-    n_cand      = min(100, len(stock_list))
-    cand_idx    = np.argsort(pre_score)[-n_cand:][::-1]
-
-    dtw_vals = [(int(i), dtw_distance(query.tolist(), mat[i].tolist()))
-                for i in cand_idx]
-    max_dtw  = max(d for _, d in dtw_vals) + 1e-8
+    pre_score   = 0.6 * pearson - 0.4 * euclid / (euclid.max() + 1e-8)
+    cand_idx    = np.argsort(pre_score)[-min(100, len(stock_list)):][::-1]
+    dtw_vals    = [(int(i), dtw_distance(query.tolist(), mat[i].tolist()))
+                   for i in cand_idx]
+    max_dtw     = max(d for _, d in dtw_vals) + 1e-8
 
     results = []
-    for (idx, dtw) in dtw_vals:
+    for idx, dtw in dtw_vals:
         corr  = float(pearson[idx])
         score = 0.5 * corr + 0.5 * (1.0 - dtw / max_dtw)
         s = stock_list[idx]
@@ -260,13 +184,13 @@ def api_search():
     results.sort(key=lambda x: -x["score"])
     return jsonify({"results": results[:top_k], "total": len(stock_list)})
 
-# ──────────────────── 启动（gunicorn 和直接运行都会执行） ────────────────────
+# ──────────────── 启动（gunicorn 和直接运行均触发） ────────────────
 
 def _init():
     if load_cache():
-        print(f"✅ 已从缓存加载 {len(stock_list)} 只股票")
+        print(f"✅ 缓存已加载 {len(stock_list)} 只股票")
     else:
-        print("⚠️  未找到缓存，开始后台下载（约 5-10 分钟）…")
+        print("⚠️  开始后台下载（约 10-20 分钟）…")
         threading.Thread(target=build_cache, daemon=True).start()
 
 _init()
