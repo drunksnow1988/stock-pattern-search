@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股形态搜索</title>
+<style>
+:root {
+  --bg:       #0d1117;
+  --panel:    #161b22;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --muted:    #8b949e;
+  --primary:  #58a6ff;
+  --green:    #3fb950;
+  --red:      #f85149;
+  --yellow:   #d29922;
+  --card-bg:  #1c2128;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ── Header ── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  color: var(--primary);
+}
+header h1 span { color: var(--text); }
+
+#status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--yellow);
+  flex-shrink: 0;
+}
+#status-dot.ready   { background: var(--green); }
+#status-dot.loading { background: var(--yellow); animation: pulse 1s infinite; }
+#status-dot.error   { background: var(--red); }
+
+@keyframes pulse {
+  0%,100% { opacity:1; } 50% { opacity:.3; }
+}
+
+#refresh-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  margin-left: 8px;
+  transition: border-color .2s, color .2s;
+}
+#refresh-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ── Progress bar ── */
+#progress-bar-wrap {
+  height: 3px;
+  background: var(--border);
+  display: none;
+}
+#progress-bar {
+  height: 3px;
+  background: var(--primary);
+  width: 0%;
+  transition: width .4s;
+}
+
+/* ── Main layout ── */
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+/* ── Drawing panel ── */
+.draw-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.draw-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.draw-header h2 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+}
+.draw-tips {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#canvas-wrap {
+  position: relative;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0a0e13;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+  user-select: none;
+}
+#drawCanvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  touch-action: none;
+}
+
+/* Axis labels */
+.axis-label-y {
+  position: absolute;
+  left: 6px;
+  font-size: 10px;
+  color: #3d4650;
+  pointer-events: none;
+}
+.axis-label-x {
+  position: absolute;
+  bottom: 4px;
+  font-size: 10px;
+  color: #3d4650;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* ── Controls ── */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: opacity .2s, transform .1s;
+}
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--primary);
+  color: #0d1117;
+}
+.btn-primary:hover:not(:disabled) { opacity: .85; }
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn-ghost:hover { border-color: var(--muted); }
+
+.topk-select {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.smooth-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.smooth-toggle input { cursor: pointer; accent-color: var(--primary); }
+
+/* ── Search spinner ── */
+#search-status {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 10px;
+  min-height: 18px;
+}
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Results ── */
+#results-section { display: none; }
+
+.results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.results-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.results-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+/* ── Stock Card ── */
+.stock-card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  transition: border-color .2s, transform .15s;
+  cursor: pointer;
+}
+.stock-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-2px);
+}
+
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.stock-name {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.stock-code {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.score-badge {
+  text-align: right;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.score-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1;
+}
+.score-label {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.card-chart {
+  width: 100%;
+  height: 60px;
+  border-radius: 4px;
+  display: block;
+  margin-bottom: 10px;
+}
+
+.card-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.stat-item span {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ── Score bar ── */
+.score-bar-wrap {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  margin-top: 10px;
+  overflow: hidden;
+}
+.score-bar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--primary), var(--green));
+  border-radius: 2px;
+}
+
+/* ── No results ── */
+.empty-state {
+  text-align: center;
+  padding: 48px 0;
+  color: var(--muted);
+}
+.empty-state svg { opacity: .3; margin-bottom: 12px; }
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  header { padding: 10px 14px; }
+  header h1 { font-size: 15px; }
+  main { padding: 14px 10px; }
+  .results-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>A股<span>形态搜索</span></h1>
+  <div id="status-pill">
+    <div id="status-dot"></div>
+    <span id="status-text">连接中…</span>
+    <button id="refresh-btn" onclick="refreshData()">↻ 刷新数据</button>
+  </div>
+</header>
+
+<div id="progress-bar-wrap">
+  <div id="progress-bar"></div>
+</div>
+
+<main>
+  <!-- Drawing Panel -->
+  <div class="draw-panel">
+    <div class="draw-header">
+      <h2>绘制目标形态</h2>
+      <div class="draw-tips">在下方画出你想找的走势形态，从左到右代表时间方向</div>
+    </div>
+
+    <div id="canvas-wrap">
+      <canvas id="drawCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-primary" id="search-btn" onclick="doSearch()" disabled>
+        🔍 搜索相似形态
+      </button>
+      <button class="btn btn-ghost" onclick="clearCanvas()">清除</button>
+      <select class="topk-select" id="topk-select">
+        <option value="10">Top 10</option>
+        <option value="20" selected>Top 20</option>
+        <option value="30">Top 30</option>
+        <option value="50">Top 50</option>
+      </select>
+      <label class="smooth-toggle">
+        <input type="checkbox" id="smooth-check" checked> 平滑曲线
+      </label>
+    </div>
+
+    <div id="search-status"></div>
+  </div>
+
+  <!-- Results -->
+  <div id="results-section">
+    <div class="results-header">
+      <h2 id="results-title">相似形态股票</h2>
+      <div class="results-meta" id="results-meta"></div>
+    </div>
+    <div class="results-grid" id="results-grid"></div>
+  </div>
+</main>
+
+<script>
+// ════════════════════════════════════════════════════
+//  Canvas 绘图
+// ════════════════════════════════════════════════════
+const canvas  = document.getElementById('drawCanvas');
+const ctx     = canvas.getContext('2d');
+const CANVAS_W = 900;
+const CANVAS_H = 280;
+
+canvas.width  = CANVAS_W;
+canvas.height = CANVAS_H;
+
+let rawPoints = [];   // [{x,y}] 原始鼠标点（像素）
+let isDrawing = false;
+let hasDrawn  = false;
+
+// ── 背景网格 ──
+function drawGrid() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // 背景
+  ctx.fillStyle = '#0a0e13';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // 水平网格线
+  ctx.strokeStyle = '#1a2030';
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = (CANVAS_H / 4) * i;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
+  }
+  // 垂直网格线
+  for (let i = 1; i < 6; i++) {
+    const x = (CANVAS_W / 6) * i;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+  }
+
+  // 轴标签（涨跌方向）
+  ctx.fillStyle = '#2d3748';
+  ctx.font = '11px monospace';
+  ctx.fillText('涨', 6, 14);
+  ctx.fillText('跌', 6, CANVAS_H - 4);
+  ctx.fillText('← 更早', 8, CANVAS_H / 2);
+  ctx.fillText('最新 →', CANVAS_W - 46, CANVAS_H / 2);
+}
+
+// ── 绘制曲线 ──
+function drawCurve(pts, smooth = true) {
+  if (pts.length < 2) return;
+
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(88,166,255,0.4)';
+  ctx.shadowBlur  = 8;
+
+  ctx.beginPath();
+  if (smooth && pts.length > 3) {
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i].x + pts[i+1].x) / 2;
+      const my = (pts[i].y + pts[i+1].y) / 2;
+      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+    }
+    const last = pts[pts.length - 1];
+    ctx.lineTo(last.x, last.y);
+  } else {
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // 渐变填充
+  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+  grad.addColorStop(0, 'rgba(88,166,255,0.12)');
+  grad.addColorStop(1, 'rgba(88,166,255,0)');
+  ctx.lineTo(pts[pts.length-1].x, CANVAS_H);
+  ctx.lineTo(pts[0].x, CANVAS_H);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+}
+
+function redraw() {
+  drawGrid();
+  if (rawPoints.length > 1) {
+    const smooth = document.getElementById('smooth-check').checked;
+    const pts = smooth ? smoothPoints(rawPoints, 4) : rawPoints;
+    drawCurve(pts, smooth);
+  }
+}
+
+// ── 平滑处理（移动平均） ──
+function smoothPoints(pts, window = 4) {
+  if (pts.length <= window) return pts;
+  const out = [];
+  for (let i = 0; i < pts.length; i++) {
+    let sx = 0, sy = 0, cnt = 0;
+    for (let j = Math.max(0, i - window); j <= Math.min(pts.length - 1, i + window); j++) {
+      sx += pts[j].x; sy += pts[j].y; cnt++;
+    }
+    out.push({ x: sx / cnt, y: sy / cnt });
+  }
+  return out;
+}
+
+// ── 鼠标/触摸事件 ──
+function getPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = CANVAS_W / rect.width;
+  const scaleY = CANVAS_H / rect.height;
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: (src.clientX - rect.left) * scaleX,
+    y: (src.clientY - rect.top)  * scaleY,
+  };
+}
+
+function onStart(e) {
+  e.preventDefault();
+  isDrawing = true;
+  rawPoints = [getPos(e)];
+  hasDrawn  = false;
+  document.getElementById('search-btn').disabled = true;
+}
+
+function onMove(e) {
+  e.preventDefault();
+  if (!isDrawing) return;
+  const p = getPos(e);
+  const last = rawPoints[rawPoints.length - 1];
+  if (Math.hypot(p.x - last.x, p.y - last.y) > 3) {
+    rawPoints.push(p);
+    redraw();
+  }
+}
+
+function onEnd(e) {
+  e.preventDefault();
+  if (!isDrawing) return;
+  isDrawing = false;
+  if (rawPoints.length > 5) {
+    hasDrawn = true;
+    document.getElementById('search-btn').disabled = (window._serverReady !== true);
+    redraw();
+  }
+}
+
+canvas.addEventListener('mousedown',  onStart);
+canvas.addEventListener('mousemove',  onMove);
+canvas.addEventListener('mouseup',    onEnd);
+canvas.addEventListener('mouseleave', onEnd);
+canvas.addEventListener('touchstart', onStart, { passive: false });
+canvas.addEventListener('touchmove',  onMove,  { passive: false });
+canvas.addEventListener('touchend',   onEnd,   { passive: false });
+
+function clearCanvas() {
+  rawPoints = [];
+  hasDrawn  = false;
+  drawGrid();
+  document.getElementById('search-btn').disabled = true;
+  document.getElementById('results-section').style.display = 'none';
+  document.getElementById('search-status').innerHTML = '';
+}
+
+document.getElementById('smooth-check').addEventListener('change', redraw);
+
+// ════════════════════════════════════════════════════
+//  状态轮询
+// ════════════════════════════════════════════════════
+window._serverReady = false;
+let _pollTimer = null;
+
+function pollStatus() {
+  fetch('/api/status')
+    .then(r => r.json())
+    .then(s => {
+      const dot  = document.getElementById('status-dot');
+      const text = document.getElementById('status-text');
+      const pb   = document.getElementById('progress-bar-wrap');
+      const bar  = document.getElementById('progress-bar');
+
+      dot.className = s.status;
+      text.textContent = s.message || s.status;
+
+      if (s.status === 'loading') {
+        pb.style.display = 'block';
+        const pct = s.total > 0 ? (s.progress / s.total * 100).toFixed(1) : 0;
+        bar.style.width = pct + '%';
+        window._serverReady = false;
+        _pollTimer = setTimeout(pollStatus, 1500);
+      } else if (s.status === 'ready') {
+        pb.style.display = 'none';
+        window._serverReady = true;
+        // 不管按钮之前是否因服务未就绪被禁用，只要画了线就立刻启用
+        if (hasDrawn) document.getElementById('search-btn').disabled = false;
+        clearTimeout(_pollTimer);
+        _pollTimer = setTimeout(pollStatus, 30000);
+      } else if (s.status === 'error') {
+        window._serverReady = false;
+        _pollTimer = setTimeout(pollStatus, 5000);
+      } else {
+        _pollTimer = setTimeout(pollStatus, 2000);
+      }
+    })
+    .catch(() => {
+      document.getElementById('status-text').textContent = '无法连接后端';
+      _pollTimer = setTimeout(pollStatus, 3000);
+    });
+}
+
+function refreshData() {
+  fetch('/api/refresh', { method: 'POST' })
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('status-text').textContent = d.message || d.error;
+      pollStatus();
+    });
+}
+
+pollStatus();
+
+// ════════════════════════════════════════════════════
+//  搜索
+// ════════════════════════════════════════════════════
+function doSearch() {
+  if (!hasDrawn || rawPoints.length < 6) return;
+
+  const smooth = document.getElementById('smooth-check').checked;
+  const pts    = smooth ? smoothPoints(rawPoints, 4) : rawPoints;
+  const topK   = parseInt(document.getElementById('topk-select').value);
+
+  // 归一化到 [0,1]
+  const xs = pts.map(p => p.x);
+  const ys = pts.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const normPts = pts.map(p => ({
+    x: maxX > minX ? (p.x - minX) / (maxX - minX) : 0,
+    y: maxY > minY ? (p.y - minY) / (maxY - minY) : 0,
+  }));
+
+  const statusEl = document.getElementById('search-status');
+  const searchBtn = document.getElementById('search-btn');
+  statusEl.innerHTML = '<span class="spinner"></span>正在搜索全市场形态…';
+  searchBtn.disabled = true;
+
+  fetch('/api/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ points: normPts, topK }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      searchBtn.disabled = false;
+      if (data.error) {
+        statusEl.textContent = '错误：' + data.error;
+        return;
+      }
+      statusEl.textContent = `搜索完成，从 ${data.total.toLocaleString()} 只股票中找到 ${data.results.length} 个相似形态`;
+      renderResults(data.results);
+    })
+    .catch(err => {
+      searchBtn.disabled = false;
+      statusEl.textContent = '请求失败：' + err.message;
+    });
+}
+
+// ════════════════════════════════════════════════════
+//  结果渲染
+// ════════════════════════════════════════════════════
+function renderResults(results) {
+  const section = document.getElementById('results-section');
+  const grid    = document.getElementById('results-grid');
+  const title   = document.getElementById('results-title');
+
+  section.style.display = 'block';
+  title.textContent = `相似形态股票 (${results.length})`;
+  grid.innerHTML = '';
+
+  if (results.length === 0) {
+    grid.innerHTML = `<div class="empty-state">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <div>未找到相似形态</div></div>`;
+    return;
+  }
+
+  // 计算涨跌幅
+  results.forEach((s, rank) => {
+    const pct   = calcChange(s.prices);
+    const card  = document.createElement('div');
+    card.className = 'stock-card';
+    card.onclick = () => openEastMoney(s.code);
+
+    const scorePercent = Math.max(0, Math.min(100, (s.score + 0.5) * 100));
+    const pctColor = pct >= 0 ? 'var(--red)' : 'var(--green)'; // A股红涨绿跌
+
+    card.innerHTML = `
+      <div class="card-top">
+        <div>
+          <div class="stock-name">${s.name}</div>
+          <div class="stock-code">${s.code}</div>
+        </div>
+        <div class="score-badge">
+          <div class="score-value">${(scorePercent).toFixed(0)}%</div>
+          <div class="score-label">相似度</div>
+        </div>
+      </div>
+      <canvas class="card-chart" id="chart-${s.code}-${rank}" width="260" height="60"></canvas>
+      <div class="score-bar-wrap"><div class="score-bar" style="width:${scorePercent}%"></div></div>
+      <div class="card-stats" style="margin-top:8px">
+        <div class="stat-item">区间涨跌 <span style="color:${pctColor}">${pct >= 0 ? '+' : ''}${pct}%</span></div>
+        <div class="stat-item">Pearson <span>${s.pearson.toFixed(3)}</span></div>
+      </div>`;
+
+    grid.appendChild(card);
+
+    // 画 sparkline（异步，让 DOM 先渲染）
+    requestAnimationFrame(() => {
+      const c = document.getElementById(`chart-${s.code}-${rank}`);
+      if (c) drawSparkline(c, s.prices);
+    });
+  });
+}
+
+function calcChange(prices) {
+  if (!prices || prices.length < 2) return 0;
+  const first = prices[0], last = prices[prices.length - 1];
+  return ((last - first) / first * 100).toFixed(2);
+}
+
+function drawSparkline(canvas, prices) {
+  if (!prices || prices.length < 2) return;
+  const W = canvas.width, H = canvas.height;
+  const ctx = canvas.getContext('2d');
+
+  const lo  = Math.min(...prices);
+  const hi  = Math.max(...prices);
+  const rng = hi - lo || 1;
+
+  const pts = prices.map((v, i) => ({
+    x: (i / (prices.length - 1)) * W,
+    y: H - ((v - lo) / rng) * (H - 6) - 3,
+  }));
+
+  const rising = prices[prices.length - 1] >= prices[0];
+  const lineColor = rising ? '#f85149' : '#3fb950'; // A股红涨绿跌
+
+  // 渐变填充
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, rising ? 'rgba(248,81,73,0.2)' : 'rgba(63,185,80,0.2)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length - 1; i++) {
+    const mx = (pts[i].x + pts[i+1].x) / 2;
+    const my = (pts[i].y + pts[i+1].y) / 2;
+    ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
+  }
+  ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+
+  // fill
+  ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+}
+
+function openEastMoney(code) {
+  const prefix = code.startsWith('6') ? '1' : '0';
+  window.open(`https://quote.eastmoney.com/concept/s${prefix}${code}.html`, '_blank');
+}
+
+// ── 初始化画板 ──
+drawGrid();
+</script>
+</body>
+</html>
