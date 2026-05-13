@@ -78,19 +78,31 @@ def build_cache():
     set_state(status="loading", progress=0, total=100,
               message="正在下载股票数据缓存（约 3MB）…")
     try:
-        import urllib.request, gzip, io
-        set_state(message="连接 GitHub…")
-        with urllib.request.urlopen(CACHE_URL, timeout=60) as resp:
-            gz_data = resp.read()
+        import gzip
+        import requests as _req
+        set_state(message="连接 GitHub Release…")
 
-        set_state(progress=50, message="解压缓存文件…")
-        raw = gzip.decompress(gz_data)
-        data = pickle.loads(raw)
+        # requests 自动跟随重定向，比 urllib 可靠
+        resp = _req.get(CACHE_URL, timeout=120, stream=True,
+                        headers={"Accept-Encoding": "identity"})
+        resp.raise_for_status()
+
+        chunks = []
+        downloaded = 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            if chunk:
+                chunks.append(chunk)
+                downloaded += len(chunk)
+                set_state(message=f"下载中… {downloaded//1024} KB")
+
+        set_state(progress=80, message="解压缓存文件…")
+        gz_data = b"".join(chunks)
+        raw     = gzip.decompress(gz_data)
+        data    = pickle.loads(raw)
 
         stock_list   = data["stock_list"]
         stock_matrix = data["stock_matrix"]
 
-        # 顺手存到本地，下次直接读
         with open(CACHE_FILE, "wb") as f:
             f.write(raw)
 
