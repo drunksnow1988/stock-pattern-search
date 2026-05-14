@@ -356,15 +356,127 @@ main {
   main { padding: 14px 10px; }
   .results-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
 }
+
+/* ── Auth Overlay ── */
+#auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 17, 23, 0.95);
+  backdrop-filter: blur(6px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#auth-overlay.hidden { display: none; }
+
+.auth-box {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: 360px;
+  max-width: 90vw;
+  text-align: center;
+}
+.auth-logo {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 6px;
+  letter-spacing: .5px;
+}
+.auth-logo span { color: var(--text); }
+.auth-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 28px;
+}
+.auth-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 15px;
+  font-family: monospace;
+  letter-spacing: 2px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  text-align: center;
+  outline: none;
+  transition: border-color .2s;
+  margin-bottom: 12px;
+}
+.auth-input:focus { border-color: var(--primary); }
+.auth-input::placeholder { letter-spacing: 0; font-family: inherit; color: var(--muted); }
+.auth-btn {
+  width: 100%;
+  padding: 11px;
+  background: var(--primary);
+  color: #0d1117;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .2s;
+}
+.auth-btn:hover { opacity: .85; }
+.auth-btn:disabled { opacity: .4; cursor: not-allowed; }
+.auth-error {
+  font-size: 12px;
+  color: var(--red);
+  min-height: 18px;
+  margin-top: 10px;
+}
+.auth-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 16px;
+}
+.auth-hint strong { color: var(--yellow); }
+
+/* ── Expiry badge ── */
+#expiry-badge {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 3px 10px;
+  margin-left: 4px;
+  display: none;
+}
+#expiry-badge.expiring-soon { color: var(--yellow); border-color: var(--yellow); }
 </style>
 </head>
 <body>
+
+<!-- Auth Overlay -->
+<div id="auth-overlay">
+  <div class="auth-box">
+    <div class="auth-logo">A股<span>形态搜索</span></div>
+    <div class="auth-subtitle">专业版 · 全市场形态匹配</div>
+    <input
+      id="license-input"
+      class="auth-input"
+      placeholder="输入授权码 XXXX-XXXX-XXXX-XXXX"
+      maxlength="19"
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <button class="auth-btn" id="activate-btn" onclick="activate()">激活</button>
+    <div class="auth-error" id="auth-error"></div>
+    <div class="auth-hint">月订阅 <strong>¥9.9</strong> · 单设备授权 · 到期自动停用</div>
+  </div>
+</div>
 
 <header>
   <h1>A股<span>形态搜索</span></h1>
   <div id="status-pill">
     <div id="status-dot"></div>
     <span id="status-text">连接中…</span>
+    <span id="expiry-badge"></span>
     <button id="refresh-btn" onclick="refreshData()">↻ 刷新数据</button>
   </div>
 </header>
@@ -415,6 +527,132 @@ main {
 </main>
 
 <script>
+// ════════════════════════════════════════════════════
+//  授权认证
+// ════════════════════════════════════════════════════
+
+let _licenseKey = '';
+let _fingerprint = '';
+
+async function getFingerprint() {
+  const raw = [
+    navigator.userAgent,
+    navigator.language,
+    screen.width + 'x' + screen.height + 'x' + screen.colorDepth,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+    navigator.hardwareConcurrency || 0,
+    navigator.platform || '',
+  ].join('|');
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function authFetch(url, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers, {
+    'X-License-Key': _licenseKey,
+    'X-Fingerprint': _fingerprint,
+  });
+  const r = await fetch(url, opts);
+  if (r.status === 401) {
+    const d = await r.json().catch(() => ({}));
+    showOverlay(d.error || '授权已失效，请重新激活');
+    throw new Error('Unauthorized');
+  }
+  return r;
+}
+
+function showOverlay(msg) {
+  document.getElementById('auth-overlay').classList.remove('hidden');
+  if (msg) document.getElementById('auth-error').textContent = msg;
+}
+
+function hideOverlay() {
+  document.getElementById('auth-overlay').classList.add('hidden');
+}
+
+function setExpiryBadge(expiry) {
+  const badge = document.getElementById('expiry-badge');
+  if (!expiry) { badge.style.display = 'none'; return; }
+  badge.style.display = 'inline';
+  const daysLeft = Math.ceil((new Date(expiry) - new Date()) / 86400000);
+  badge.textContent = `到期 ${expiry}（剩余 ${daysLeft} 天）`;
+  badge.className = daysLeft <= 7 ? 'expiring-soon' : '';
+}
+
+async function initAuth() {
+  _fingerprint = await getFingerprint();
+  const saved = localStorage.getItem('licenseKey');
+  if (!saved) { showOverlay(); return; }
+  _licenseKey = saved;
+  try {
+    const r = await fetch('/api/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: _licenseKey, fingerprint: _fingerprint }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      hideOverlay();
+      setExpiryBadge(d.expiry);
+      pollStatus();
+    } else {
+      localStorage.removeItem('licenseKey');
+      _licenseKey = '';
+      showOverlay(d.message || '授权码已失效，请重新激活');
+    }
+  } catch {
+    showOverlay('网络错误，请检查连接');
+  }
+}
+
+async function activate() {
+  const key = document.getElementById('license-input').value.trim().toUpperCase();
+  if (key.length !== 19) {
+    document.getElementById('auth-error').textContent = '请输入完整的授权码（XXXX-XXXX-XXXX-XXXX）';
+    return;
+  }
+  const btn = document.getElementById('activate-btn');
+  btn.disabled = true;
+  btn.textContent = '验证中…';
+  document.getElementById('auth-error').textContent = '';
+  try {
+    const r = await fetch('/api/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, fingerprint: _fingerprint }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      _licenseKey = key;
+      localStorage.setItem('licenseKey', key);
+      hideOverlay();
+      setExpiryBadge(d.expiry);
+      pollStatus();
+    } else {
+      document.getElementById('auth-error').textContent = d.message || '激活失败';
+    }
+  } catch {
+    document.getElementById('auth-error').textContent = '网络错误，请重试';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '激活';
+  }
+}
+
+// 授权码自动格式化（XXXX-XXXX-XXXX-XXXX）
+document.getElementById('license-input').addEventListener('input', function () {
+  let v = this.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 16);
+  let fmt = '';
+  for (let i = 0; i < v.length; i++) {
+    if (i > 0 && i % 4 === 0) fmt += '-';
+    fmt += v[i];
+  }
+  this.value = fmt;
+});
+document.getElementById('license-input').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') activate();
+});
+
 // ════════════════════════════════════════════════════
 //  Canvas 绘图
 // ════════════════════════════════════════════════════
@@ -695,15 +933,16 @@ function pollStatus() {
 }
 
 function refreshData() {
-  fetch('/api/refresh', { method: 'POST' })
+  authFetch('/api/refresh', { method: 'POST' })
     .then(r => r.json())
     .then(d => {
       document.getElementById('status-text').textContent = d.message || d.error;
       pollStatus();
-    });
+    })
+    .catch(() => {});
 }
 
-pollStatus();
+// pollStatus() 由 initAuth() / activate() 在授权成功后触发
 
 // ════════════════════════════════════════════════════
 //  搜索
@@ -730,7 +969,7 @@ function doSearch() {
   statusEl.innerHTML = '<span class="spinner"></span>正在搜索全市场形态…';
   searchBtn.disabled = true;
 
-  fetch('/api/search', {
+  authFetch('/api/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ points: normPts, topK }),
@@ -747,7 +986,9 @@ function doSearch() {
     })
     .catch(err => {
       searchBtn.disabled = false;
-      statusEl.textContent = '请求失败：' + err.message;
+      if (err.message !== 'Unauthorized') {
+        statusEl.textContent = '请求失败：' + err.message;
+      }
     });
 }
 
@@ -863,8 +1104,9 @@ function openEastMoney(code) {
   window.open(`https://quote.eastmoney.com/${prefix}${code}.html`, '_blank');
 }
 
-// ── 初始化画板 ──
+// ── 初始化 ──
 drawGrid();
+initAuth();
 </script>
 </body>
 </html>

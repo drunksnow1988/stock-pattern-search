@@ -5,7 +5,8 @@ A股形态搜索后端
 - 历史数据：Yahoo Finance（全球可访问）
 """
 
-import os, pickle, threading, json
+import os, pickle, threading, json, sqlite3, secrets, string, argparse
+from functools import wraps
 import numpy as np
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -18,13 +19,77 @@ CORS(app)
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, "stock_cache.pkl")
 LIST_FILE  = os.path.join(BASE_DIR, "stocks_list.json")
+DB_FILE    = os.path.join(BASE_DIR, "licenses.db")
 N_DAYS     = 60
+
+DISABLE_AUTH = os.environ.get("DISABLE_AUTH", "0") == "1"
 
 state = {"status": "idle", "progress": 0, "total": 0,
          "message": "等待启动", "last_updated": None}
 state_lock   = threading.Lock()
 stock_list   = []
 stock_matrix = None
+
+# ──────────────── 授权系统 ────────────────
+
+def init_db():
+    con = sqlite3.connect(DB_FILE)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS license_keys (
+            key          TEXT PRIMARY KEY,
+            expiry_date  TEXT NOT NULL,
+            fingerprint  TEXT,
+            activated_at TEXT,
+            note         TEXT,
+            created_at   TEXT NOT NULL
+        )
+    """)
+    con.commit()
+    con.close()
+
+
+def check_license(key: str, fingerprint: str):
+    """Returns (ok, message, expiry). Locks fingerprint on first use."""
+    con = sqlite3.connect(DB_FILE)
+    con.row_factory = sqlite3.Row
+    try:
+        row = con.execute(
+            "SELECT * FROM license_keys WHERE key = ?", (key,)
+        ).fetchone()
+        if not row:
+            return False, "授权码无效", None
+        expiry = row["expiry_date"]
+        if datetime.now().strftime("%Y-%m-%d") > expiry:
+            return False, f"授权码已于 {expiry} 到期", expiry
+        stored_fp = row["fingerprint"]
+        if stored_fp is None:
+            con.execute(
+                "UPDATE license_keys SET fingerprint=?, activated_at=? WHERE key=?",
+                (fingerprint, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), key)
+            )
+            con.commit()
+            return True, "激活成功", expiry
+        if stored_fp != fingerprint:
+            return False, "该授权码已绑定其他设备，如需换绑请联系客服", expiry
+        return True, "授权有效", expiry
+    finally:
+        con.close()
+
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if DISABLE_AUTH:
+            return f(*args, **kwargs)
+        key = request.headers.get("X-License-Key", "").strip()
+        fp  = request.headers.get("X-Fingerprint", "").strip()
+        if not key or not fp:
+            return jsonify({"error": "未提供授权信息，请先激活"}), 401
+        ok, msg, _ = check_license(key, fp)
+        if not ok:
+            return jsonify({"error": msg}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # ──────────────── 数值工具 ────────────────
 
@@ -82,7 +147,6 @@ def build_cache():
         import requests as _req
         set_state(message="连接 GitHub Release…")
 
-        # requests 自动跟随重定向，比 urllib 可靠
         resp = _req.get(CACHE_URL, timeout=120, stream=True,
                         headers={"Accept-Encoding": "identity"})
         resp.raise_for_status()
@@ -142,7 +206,18 @@ def api_status():
     with state_lock:
         return jsonify(dict(state))
 
+@app.route("/api/verify", methods=["POST"])
+def api_verify():
+    body = request.get_json(force=True) or {}
+    key  = body.get("key", "").strip().upper()
+    fp   = body.get("fingerprint", "").strip()
+    if not key or not fp:
+        return jsonify({"ok": False, "message": "参数缺失", "expiry": None}), 400
+    ok, msg, expiry = check_license(key, fp)
+    return jsonify({"ok": ok, "message": msg, "expiry": expiry})
+
 @app.route("/api/refresh", methods=["POST"])
+@require_auth
 def api_refresh():
     if state["status"] == "loading":
         return jsonify({"error": "正在加载中，请稍候"}), 400
@@ -150,6 +225,7 @@ def api_refresh():
     return jsonify({"message": "已开始刷新数据"})
 
 @app.route("/api/search", methods=["POST"])
+@require_auth
 def api_search():
     if state["status"] != "ready":
         return jsonify({"error": f"数据未就绪（{state['message']}）"}), 503
@@ -171,7 +247,6 @@ def api_search():
     dtw_vals    = [(int(i), dtw_distance(query.tolist(), mat[i].tolist()))
                    for i in cand_idx]
 
-    # 绝对参考值：两条完全无关的z归一化序列长度60的典型DTW距离
     DTW_REF = float(N_DAYS) ** 0.5 * 2  # ≈ 15.5
 
     results = []
@@ -196,9 +271,58 @@ def _init():
         print("⚠️  开始后台下载（约 10-20 分钟）…")
         threading.Thread(target=build_cache, daemon=True).start()
 
+init_db()
 _init()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
-    print(f"🚀  http://localhost:{port}")
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("command", nargs="?", default="serve")
+    parser.add_argument("--days",  type=int, default=30)
+    parser.add_argument("--note",  default="")
+    parser.add_argument("key_arg", nargs="?", default=None)
+    args, _ = parser.parse_known_args()
+
+    if args.command == "genkey":
+        alphabet = string.ascii_uppercase + string.digits
+        raw = "".join(secrets.choice(alphabet) for _ in range(16))
+        key = "-".join(raw[i:i+4] for i in range(0, 16, 4))
+        expiry = (datetime.now() + timedelta(days=args.days)).strftime("%Y-%m-%d")
+        con = sqlite3.connect(DB_FILE)
+        con.execute(
+            "INSERT INTO license_keys (key, expiry_date, note, created_at) VALUES (?,?,?,?)",
+            (key, expiry, args.note, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        )
+        con.commit(); con.close()
+        print(f"授权码: {key}")
+        print(f"到期日: {expiry}")
+        if args.note:
+            print(f"备注:   {args.note}")
+
+    elif args.command == "listkeys":
+        con = sqlite3.connect(DB_FILE)
+        rows = con.execute(
+            "SELECT key, expiry_date, fingerprint, activated_at, note FROM license_keys ORDER BY created_at DESC"
+        ).fetchall()
+        con.close()
+        print(f"{'授权码':<22} {'到期日':>10}  {'状态':>6}  {'激活时间':>19}  备注")
+        print("-" * 76)
+        for r in rows:
+            status = "已激活" if r[2] else "未激活"
+            print(f"{r[0]:<22} {r[1]:>10}  {status:>6}  {r[3] or '':>19}  {r[4] or ''}")
+
+    elif args.command == "resetkey":
+        key = args.key_arg
+        if not key:
+            print("用法: python backend.py resetkey <授权码>")
+        else:
+            con = sqlite3.connect(DB_FILE)
+            con.execute(
+                "UPDATE license_keys SET fingerprint=NULL, activated_at=NULL WHERE key=?", (key,)
+            )
+            con.commit(); con.close()
+            print(f"已重置: {key}（下次使用时可在新设备激活）")
+
+    else:
+        port = int(os.environ.get("PORT", 5001))
+        print(f"🚀  http://localhost:{port}")
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
