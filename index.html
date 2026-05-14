@@ -421,7 +421,8 @@ main {
 const canvas  = document.getElementById('drawCanvas');
 const ctx     = canvas.getContext('2d');
 const CANVAS_W = 900;
-const CANVAS_H = 280;
+const CANVAS_H = 300;
+const PAD_L = 46, PAD_R = 10, PAD_T = 10, PAD_B = 26;
 
 canvas.width  = CANVAS_W;
 canvas.height = CANVAS_H;
@@ -433,31 +434,44 @@ let hasDrawn  = false;
 // ── 背景网格 ──
 function drawGrid() {
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-
-  // 背景
   ctx.fillStyle = '#0a0e13';
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  // 水平网格线
-  ctx.strokeStyle = '#1a2030';
-  ctx.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    const y = (CANVAS_H / 4) * i;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(CANVAS_W, y); ctx.stroke();
-  }
-  // 垂直网格线
-  for (let i = 1; i < 6; i++) {
-    const x = (CANVAS_W / 6) * i;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, CANVAS_H); ctx.stroke();
+  const dw = CANVAS_W - PAD_L - PAD_R;
+  const dh = CANVAS_H - PAD_T - PAD_B;
+
+  // Y 轴标签 + 水平网格线
+  const yLabels = ['+20%', '+10%', '0%', '-10%', '-20%'];
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD_T + (dh / 4) * i;
+    ctx.strokeStyle = i === 2 ? '#2a3550' : '#1a2030';
+    ctx.lineWidth = i === 2 ? 1.5 : 1;
+    ctx.setLineDash(i === 2 ? [5, 4] : []);
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(CANVAS_W - PAD_R, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = i === 2 ? '#4a5568' : '#2d3748';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(yLabels[i], PAD_L - 5, y + 4);
   }
 
-  // 轴标签（涨跌方向）
-  ctx.fillStyle = '#2d3748';
-  ctx.font = '11px monospace';
-  ctx.fillText('涨', 6, 14);
-  ctx.fillText('跌', 6, CANVAS_H - 4);
-  ctx.fillText('← 更早', 8, CANVAS_H / 2);
-  ctx.fillText('最新 →', CANVAS_W - 46, CANVAS_H / 2);
+  // X 轴标签 + 垂直网格线
+  const xLabels = ['60天前', '45天前', '30天前', '15天前', '今日'];
+  for (let i = 0; i <= 4; i++) {
+    const x = PAD_L + (dw / 4) * i;
+    ctx.strokeStyle = '#1a2030';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, CANVAS_H - PAD_B); ctx.stroke();
+    ctx.fillStyle = '#2d3748';
+    ctx.font = '10px monospace';
+    ctx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center';
+    ctx.fillText(xLabels[i], x, CANVAS_H - PAD_B + 16);
+  }
+
+  // Y 轴边框线
+  ctx.strokeStyle = '#2d3748';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PAD_L, PAD_T); ctx.lineTo(PAD_L, CANVAS_H - PAD_B); ctx.stroke();
 }
 
 // ── 绘制曲线 ──
@@ -529,8 +543,8 @@ function getPos(e) {
   const scaleY = CANVAS_H / rect.height;
   const src = e.touches ? e.touches[0] : e;
   return {
-    x: (src.clientX - rect.left) * scaleX,
-    y: (src.clientY - rect.top)  * scaleY,
+    x: Math.min(Math.max((src.clientX - rect.left) * scaleX, PAD_L), CANVAS_W - PAD_R),
+    y: Math.min(Math.max((src.clientY - rect.top)  * scaleY, PAD_T), CANVAS_H - PAD_B),
   };
 }
 
@@ -547,7 +561,8 @@ function onMove(e) {
   if (!isDrawing) return;
   const p = getPos(e);
   const last = rawPoints[rawPoints.length - 1];
-  if (Math.hypot(p.x - last.x, p.y - last.y) > 3) {
+  if (p.x <= last.x) return;  // 禁止时间倒退，只能向右画
+  if (Math.hypot(p.x - last.x, p.y - last.y) > 2) {
     rawPoints.push(p);
     redraw();
   }
