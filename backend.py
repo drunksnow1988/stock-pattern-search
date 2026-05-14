@@ -170,12 +170,15 @@ def api_search():
     cand_idx    = np.argsort(pre_score)[-min(100, len(stock_list)):][::-1]
     dtw_vals    = [(int(i), dtw_distance(query.tolist(), mat[i].tolist()))
                    for i in cand_idx]
-    max_dtw     = max(d for _, d in dtw_vals) + 1e-8
+
+    # 绝对参考值：两条完全无关的z归一化序列长度60的典型DTW距离
+    DTW_REF = float(N_DAYS) ** 0.5 * 2  # ≈ 15.5
 
     results = []
     for idx, dtw in dtw_vals:
-        corr  = float(pearson[idx])
-        score = 0.5 * corr + 0.5 * (1.0 - dtw / max_dtw)
+        corr      = float(pearson[idx])
+        dtw_score = max(0.0, 1.0 - dtw / DTW_REF)
+        score     = 0.5 * max(0.0, corr) + 0.5 * dtw_score
         s = stock_list[idx]
         results.append({"code": s["code"], "name": s["name"],
                         "score": round(score, 4), "pearson": round(corr, 4),
