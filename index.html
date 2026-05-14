@@ -440,17 +440,18 @@ function drawGrid() {
   const dw = CANVAS_W - PAD_L - PAD_R;
   const dh = CANVAS_H - PAD_T - PAD_B;
 
-  // Y 轴标签 + 水平网格线
-  const yLabels = ['+20%', '+10%', '0%', '-10%', '-20%'];
+  // Y 轴标签 + 水平网格线（底部 0%，向上递增）
+  const yLabels = ['+40%', '+30%', '+20%', '+10%', '0%'];
   for (let i = 0; i <= 4; i++) {
     const y = PAD_T + (dh / 4) * i;
-    ctx.strokeStyle = i === 2 ? '#2a3550' : '#1a2030';
-    ctx.lineWidth = i === 2 ? 1.5 : 1;
-    ctx.setLineDash(i === 2 ? [5, 4] : []);
+    const isZero = i === 4;
+    ctx.strokeStyle = isZero ? '#2a3550' : '#1a2030';
+    ctx.lineWidth = isZero ? 1.5 : 1;
+    ctx.setLineDash(isZero ? [5, 4] : []);
     ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(CANVAS_W - PAD_R, y); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = i === 2 ? '#4a5568' : '#2d3748';
-    ctx.font = '10px monospace';
+    ctx.fillStyle = isZero ? '#f6c90e' : '#7dd3fc';
+    ctx.font = 'bold 11px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(yLabels[i], PAD_L - 5, y + 4);
   }
@@ -462,14 +463,14 @@ function drawGrid() {
     ctx.strokeStyle = '#1a2030';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, CANVAS_H - PAD_B); ctx.stroke();
-    ctx.fillStyle = '#2d3748';
-    ctx.font = '10px monospace';
+    ctx.fillStyle = i === 4 ? '#f6c90e' : '#7dd3fc';
+    ctx.font = 'bold 11px monospace';
     ctx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center';
     ctx.fillText(xLabels[i], x, CANVAS_H - PAD_B + 16);
   }
 
   // Y 轴边框线
-  ctx.strokeStyle = '#2d3748';
+  ctx.strokeStyle = '#3a4a6a';
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PAD_L, PAD_T); ctx.lineTo(PAD_L, CANVAS_H - PAD_B); ctx.stroke();
 }
