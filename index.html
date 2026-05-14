@@ -792,8 +792,8 @@ function drawSparkline(canvas, prices) {
 }
 
 function openEastMoney(code) {
-  const prefix = code.startsWith('6') ? '1' : '0';
-  window.open(`https://quote.eastmoney.com/concept/s${prefix}${code}.html`, '_blank');
+  const prefix = code.startsWith('6') ? 'sh' : 'sz';
+  window.open(`https://quote.eastmoney.com/${prefix}${code}.html`, '_blank');
 }
 
 // ── 初始化画板 ──
