@@ -430,6 +430,8 @@ canvas.height = CANVAS_H;
 let rawPoints = [];   // [{x,y}] 原始鼠标点（像素）
 let isDrawing = false;
 let hasDrawn  = false;
+let yMax = 40;        // 当前Y轴最大百分比
+let yExpandTimer = null;
 
 // ── 背景网格 ──
 function drawGrid() {
@@ -440,33 +442,62 @@ function drawGrid() {
   const dw = CANVAS_W - PAD_L - PAD_R;
   const dh = CANVAS_H - PAD_T - PAD_B;
 
-  // Y 轴标签 + 水平网格线（底部 0%，向上递增）
-  const yLabels = ['+40%', '+30%', '+20%', '+10%', '0%'];
+  // Y 轴标签 + 水平网格线（动态量程）
+  const yLabels = Array.from({length: 5}, (_, i) => {
+    const pct = Math.round(yMax * (4 - i) / 4);
+    return pct === 0 ? '0%' : `+${pct}%`;
+  });
   for (let i = 0; i <= 4; i++) {
     const y = PAD_T + (dh / 4) * i;
     const isZero = i === 4;
-    ctx.strokeStyle = isZero ? '#2a3550' : '#1a2030';
+    ctx.strokeStyle = isZero ? '#2a3550' : '#1c2a40';
     ctx.lineWidth = isZero ? 1.5 : 1;
     ctx.setLineDash(isZero ? [5, 4] : []);
     ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(CANVAS_W - PAD_R, y); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = isZero ? '#f6c90e' : '#7dd3fc';
-    ctx.font = 'bold 11px monospace';
+    // 标签背景
+    const label = yLabels[i];
+    ctx.font = 'bold 12px monospace';
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(13,17,23,0.75)';
+    ctx.fillRect(PAD_L - tw - 12, y - 9, tw + 8, 16);
+    ctx.fillStyle = isZero ? '#f6c90e' : (i === 0 && yMax >= 200 ? '#f85149' : '#a5d8ff');
     ctx.textAlign = 'right';
-    ctx.fillText(yLabels[i], PAD_L - 5, y + 4);
+    ctx.fillText(label, PAD_L - 6, y + 4);
+  }
+
+  // 顶部扩展提示
+  if (yMax < 200) {
+    const grad = ctx.createLinearGradient(0, PAD_T, 0, PAD_T + 36);
+    grad.addColorStop(0, 'rgba(88,166,255,0.1)');
+    grad.addColorStop(1, 'rgba(88,166,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(PAD_L, PAD_T, dw, 36);
+    ctx.fillStyle = 'rgba(165,216,255,0.5)';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('↑ 画到此处自动扩展量程', PAD_L + dw / 2, PAD_T + 13);
   }
 
   // X 轴标签 + 垂直网格线
   const xLabels = ['60天前', '45天前', '30天前', '15天前', '今日'];
   for (let i = 0; i <= 4; i++) {
     const x = PAD_L + (dw / 4) * i;
-    ctx.strokeStyle = '#1a2030';
+    ctx.strokeStyle = '#1c2a40';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, PAD_T); ctx.lineTo(x, CANVAS_H - PAD_B); ctx.stroke();
-    ctx.fillStyle = i === 4 ? '#f6c90e' : '#7dd3fc';
-    ctx.font = 'bold 11px monospace';
-    ctx.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center';
-    ctx.fillText(xLabels[i], x, CANVAS_H - PAD_B + 16);
+    // 标签背景
+    const xl = xLabels[i];
+    ctx.font = 'bold 12px monospace';
+    const xw = ctx.measureText(xl).width;
+    const xpos = x;
+    const align = i === 0 ? 'left' : i === 4 ? 'right' : 'center';
+    const bgX = align === 'left' ? xpos : align === 'right' ? xpos - xw - 4 : xpos - xw / 2 - 2;
+    ctx.fillStyle = 'rgba(13,17,23,0.75)';
+    ctx.fillRect(bgX, CANVAS_H - PAD_B + 4, xw + 4, 16);
+    ctx.fillStyle = i === 4 ? '#f6c90e' : '#a5d8ff';
+    ctx.textAlign = align;
+    ctx.fillText(xl, xpos, CANVAS_H - PAD_B + 16);
   }
 
   // Y 轴边框线
@@ -523,6 +554,19 @@ function redraw() {
   }
 }
 
+// ── Y轴动态扩展 ──
+function startYExpand() {
+  if (yExpandTimer || yMax >= 200) return;
+  yExpandTimer = setInterval(() => {
+    yMax = Math.min(yMax + 10, 200);
+    redraw();
+    if (yMax >= 200) stopYExpand();
+  }, 250);
+}
+function stopYExpand() {
+  if (yExpandTimer) { clearInterval(yExpandTimer); yExpandTimer = null; }
+}
+
 // ── 平滑处理（移动平均） ──
 function smoothPoints(pts, window = 4) {
   if (pts.length <= window) return pts;
@@ -554,6 +598,7 @@ function onStart(e) {
   isDrawing = true;
   rawPoints = [getPos(e)];
   hasDrawn  = false;
+  stopYExpand();
   document.getElementById('search-btn').disabled = true;
 }
 
@@ -565,6 +610,8 @@ function onMove(e) {
   if (p.x <= last.x) return;  // 禁止时间倒退，只能向右画
   if (Math.hypot(p.x - last.x, p.y - last.y) > 2) {
     rawPoints.push(p);
+    const topZone = PAD_T + (CANVAS_H - PAD_T - PAD_B) * 0.18;
+    if (p.y < topZone) startYExpand(); else stopYExpand();
     redraw();
   }
 }
@@ -573,6 +620,7 @@ function onEnd(e) {
   e.preventDefault();
   if (!isDrawing) return;
   isDrawing = false;
+  stopYExpand();
   if (rawPoints.length > 5) {
     hasDrawn = true;
     document.getElementById('search-btn').disabled = (window._serverReady !== true);
@@ -591,6 +639,8 @@ canvas.addEventListener('touchend',   onEnd,   { passive: false });
 function clearCanvas() {
   rawPoints = [];
   hasDrawn  = false;
+  yMax = 40;
+  stopYExpand();
   drawGrid();
   document.getElementById('search-btn').disabled = true;
   document.getElementById('results-section').style.display = 'none';
