@@ -598,6 +598,7 @@ function clearCanvas() {
 }
 
 document.getElementById('smooth-check').addEventListener('change', redraw);
+document.getElementById('topk-select').addEventListener('change', () => { if (hasDrawn) doSearch(); });
 
 // ════════════════════════════════════════════════════
 //  状态轮询
